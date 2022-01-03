@@ -1,95 +1,39 @@
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "mysql.h"
 #include "fcgi_stdio.h"
 
-// 取出注册信息
-int get_register_data(char **username, char **nickname, char **password, char **mail, char **phone, char **p_date)
+char *get_json(char *json, char *json_key)
 {
-	char *name, *nick, *pwd, *email, *mobilephone, *date;
-	char *p, *t;
-	char *begin;
-	char *buf;
+        char *value;
 
-	// 开辟内存空间
-	name = (char *)malloc(64);
-	nick = (char *)malloc(64);
-	pwd = (char *)malloc(64);
-	email = (char *)malloc(64);
-	mobilephone = (char *)malloc(12);
-	date = (char *)malloc(30);
-	if(name == NULL || nick == NULL || pwd == NULL || email == NULL || mobilephone == NULL || date == NULL)
-		return -1;
+        char *begin = strstr(json, json_key);
+        if(begin == NULL)
+        {   
+                return NULL;
+        }   
+        begin += strlen(json_key);
 
-	buf = (char *)malloc(4096);
-	if(buf == NULL)
-		return -1;
+        // 找到第一个是字母数字的位置
+        while(!isalnum(json[begin - json]))
+        {   
+                begin++;
+        }   
 
-	// 从客户端读入数据
-	int len = fread(buf, 1, 4096, stdin);
-	if(len <= 0)
-	{
-		free(buf);
-		return -1;
-	}
-	
-	// nick password mail phone date username
+        char *end = strchr(begin, '"');
 
-	// 登录数据分割
-	begin = buf;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(nick, p, t-p);
-	nick[t-p] = '\0';
+        value = (char *)malloc(end - begin);
+        if(value == NULL)
+        {   
+                return NULL;
+        }   
 
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(pwd, p, t-p);
-	pwd[t-p] = '\0';
+        strncpy(value, begin, end - begin);
+        value[end - begin] = '\0';
 
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(email, p, t-p);
-	email[t-p] = '\0';
-
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(mobilephone, p, t-p);
-	mobilephone[t-p] = '\0';
-
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(date, p, t-p);
-	date[t-p] = '\0';
-
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(name, p, t-p);
-	name[t-p] = '\0';
-
-	// 传出登录信息数据
-	*username = name;
-	*password = pwd;
-	*mail = email;
-	*phone = mobilephone;
-	*nickname = nick;
-	*p_date = date;
-
-	free(buf);
-	return 0;
-
+        return value;
 }
 
 // 数据库验证登录信息
@@ -204,54 +148,87 @@ int main()
 {
 	while (FCGI_Accept() >= 0) 
 	{
-		char *username, *nickname, *password, *mail, *phone, *date;
-		int flag;
-		int ok = -1;;
-
-		flag = get_register_data(&username, &nickname, &password, &mail, &phone, &date);
-
-		if(flag == 0)
-		{
-			ok = verify_register_data(username, nickname, password, mail, phone, date);
-		}
-
-		// 发送回应
+		char *contentlength = getenv("CONTENT_LENGTH");
+		int len = 0;
+	
 		printf("Content-type: application/json\r\n\r\n");
-		switch(ok)
+
+		if(contentlength != NULL)
 		{
-			case 0:
-				printf("{\"code\":\"007\"}");	//验证成功
-				break;
-			case -1:
-				printf("{\"code\":\"008\"}");	//验证失败,服务器错误
-				break;
-			case -2:
-				printf("{\"code\":\"004\"}");	//验证失败,用户名存在
-				break;
-			case -3:
-				printf("{\"code\":\"005\"}");	//验证失败,邮箱存在
-				break;
-			case -4:
-				printf("{\"code\":\"006\"}");	//验证失败,手机存在
-				break;
-			default:
-				printf("{\"code\":\"008\"}");	//验证失败,服务器错误
-				break;
+			len = strtol(contentlength, NULL, 10);
 		}
 
+		if(len <= 0)
+		{
+			printf("{\"code\":\"008\"}");	//验证失败,服务器错误
+		}
+		else
+		{
+			char *username, *nickname, *password, *mail, *phone, *date;
 
-		if(username != NULL)
-			free(username);
-		if(nickname != NULL)
-			free(nickname);
-		if(password != NULL)
-			free(password);
-		if(mail != NULL)
-			free(mail);
-		if(phone != NULL)
-			free(phone);
-		if(date != NULL)
-			free(date);
+			char *buf = (char *)malloc(len);
+			if(buf == NULL)
+			{
+				printf("{\"code\":\"008\"}");	//验证失败,服务器错误
+				continue;
+			}
+			
+			// 从客户端读入数据
+			int readlength = fread(buf, 1, len, stdin);
+			if(readlength <= 0)
+			{       
+			        free(buf);
+				printf("{\"code\":\"008\"}");	//验证失败,服务器错误
+				continue;
+			}
+
+			// nick password mail phone date username
+			username = get_json(buf, "username");
+			nickname = get_json(buf, "nickname");
+			password = get_json(buf, "password");
+			mail = get_json(buf, "mail");
+			phone = get_json(buf, "phone");
+			date = get_json(buf, "registerdate");
+
+			int ok = verify_register_data(username, nickname, password, mail, phone, date);
+
+			switch(ok)
+			{
+				case 0:
+					printf("{\"code\":\"007\"}");	//验证成功
+					break;
+				case -1:
+					printf("{\"code\":\"008\"}");	//验证失败,服务器错误
+					break;
+				case -2:
+					printf("{\"code\":\"004\"}");	//验证失败,用户名存在
+					break;
+				case -3:
+					printf("{\"code\":\"005\"}");	//验证失败,邮箱存在
+					break;
+				case -4:
+					printf("{\"code\":\"006\"}");	//验证失败,手机存在
+					break;
+				default:
+					printf("{\"code\":\"008\"}");	//验证失败,服务器错误
+					break;
+			}
+
+			if(username != NULL)
+				free(username);
+			if(nickname != NULL)
+				free(nickname);
+			if(password != NULL)
+				free(password);
+			if(mail != NULL)
+				free(mail);
+			if(phone != NULL)
+				free(phone);
+			if(date != NULL)
+				free(date);
+			if(buf != NULL)
+				free(buf);
+		}
 	}
 
 	return 0;

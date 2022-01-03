@@ -1,9 +1,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "mysql.h"
 #include "fcgi_stdio.h"
+
+char *get_json(char *json, char *json_key)
+{       
+        char *value;
+        
+        char *begin = strstr(json, json_key);
+        if(begin == NULL)
+        {       
+                return NULL;
+        }   
+        begin += strlen(json_key);
+        
+        // 找到第一个是字母数字的位置
+        while(!isalnum(json[begin - json]))
+        {       
+                begin++;
+        }
+        
+        char *end = strchr(begin, '"');
+        
+        value = (char *)malloc(end - begin);
+        if(value == NULL)
+        {       
+                return NULL;
+        }
+        
+        strncpy(value, begin, end - begin);
+        value[end - begin] = '\0';
+        
+        return value;
+}
+
 
 // 获取客户端发送的文件名
 // 格式:del filename username md5 size  || share filename username md5 size 
@@ -271,36 +304,65 @@ int main()
 {
 	while(FCGI_Accept() >= 0)
 	{
-		char *sign, *username, *filename, *md5, *date;
-		char *size;
+		char *contentlength = getenv("CONTENT_LENGTH");
+		int len = 0;
 
 		printf("Content-type: application/json\r\n\r\n");
-
-		//int get_name(char **p_flag, char **username, char **filename, char **p_md5, char **p_size)
-		int flag = get_name(&sign, &username, &filename, &md5, &size, &date);
-
-		// 通过sign选择删除文件还是共享文件
-		//void determine_operation(char *flag, char *username, char *filename, char *md5, char *size)
-		if(flag == 0)
+		if(contentlength != NULL)
 		{
-			determine_operation(sign, username, filename, md5, size, date);
+			len = strtol(contentlength, NULL, 10);
 		}
 
+		if(len <= 0)
+		{
+			printf("{\"code\":\"002\"}");
+		}
+		else	
+		{
+			char *buf = (char *)malloc(len);
+			if(buf == NULL)
+			{
+				printf("{\"code\":\"002\"}");
+				continue;
+			}
 
-		if(sign != NULL)
-			free(sign);
-		if(username != NULL)
-			free(username);
-		if(filename != NULL)
-			free(filename);
-		if(md5 != NULL)
-			free(md5);
-		if(size != NULL)
-			free(size);
-		if(date != NULL)
-			free(date);
+			int read_len = fread(buf, 1, len, stdin);
+			if(read_len <= 0)
+			{
+				printf("{\"code\":\"002\"}");
+				free(buf);
+				continue;	
+			}
+
+			char *sign = get_json(buf, "sign");
+			char *username = get_json(buf, "username");
+			char *filename = get_json(buf, "filename");
+			char *md5 = get_json(buf, "md5");	
+			char *date = get_json(buf, "date");
+			char *size = get_json(buf, "size");
+			
+			// 通过sign选择删除文件还是共享文件
+			determine_operation(sign, username, filename, md5, size, date);
+
+
+			if(sign != NULL)
+				free(sign);
+			if(username != NULL)
+				free(username);
+			if(filename != NULL)
+				free(filename);
+			if(md5 != NULL)
+				free(md5);
+			if(size != NULL)
+				free(size);
+			if(date != NULL)
+				free(date);
+			if(buf != NULL)
+				free(buf);
+
+		}
+
 	}
-
 
 	return 0;
 

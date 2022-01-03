@@ -1,56 +1,44 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-//#include <sys/types.h>
-//#include <sys/stat.h>
-//#include <fcntl.h>
+#include <ctype.h>
 
 #include "mysql.h"
 #include "fcgi_stdio.h"
 
-
-// 客户端下载文件解析
-int get_download_fileinfo(char **p_username, char **p_filename, char **p_md5, long **p_size)
+char *get_json(char *json, char *json_key)
 {
-	char *user, *file, *md5, *tempsize;
-	char buf[1024];
-	long *size;
+        char *value;
 
-	user = (char *)malloc(64);
-	file = (char *)malloc(128);
-	md5 = (char *)malloc(33);
-	size = (long *)malloc(sizeof(long));
-	if(user == NULL || file == NULL || md5 == NULL || size == NULL)
-	{
-		return -1;
-	}
+        char *begin = strstr(json, json_key);
+        if(begin == NULL)
+        {   
+                return NULL;
+        }   
+        begin += strlen(json_key);
 
-	tempsize = (char *)malloc(20);
-	if(tempsize == NULL)
-	{
-		return -1;
-	}
-	
-	fread(buf, 1, 1024, stdin);
-	
-	sscanf(buf, "%s %s %s %s ", user, file, md5, tempsize);
+        // 找到第一个是字母数字的位置
+        while(!isalnum(json[begin - json]))
+        {   
+                begin++;
+        }   
 
-	*size = strtol(tempsize, NULL, 10);
+        char *end = strchr(begin, '"');
 
-	//printf("%s  %s  %s  %d\n", user, file, md5, *size);
+        value = (char *)malloc(end - begin);
+        if(value == NULL)
+        {   
+                return NULL;
+        }   
 
-	*p_username = user;
-	*p_filename = file;
-	*p_md5 = md5;
-	*p_size = size;
-	
-	free(tempsize);
+        strncpy(value, begin, end - begin);
+        value[end - begin] = '\0';
 
-	return 0;
+        return value;
 }
 
 // 将信息写入数据库
-int write_download_data(char *filename, char *md5, long *size)
+int write_download_data(char *filename, char *md5, char *size)
 {
 	MYSQL mysql;
 	char mysqlquery[2048];
@@ -71,7 +59,7 @@ int write_download_data(char *filename, char *md5, long *size)
 
 
 // 传输文件到客户端
-int download_file(char *filename, char *md5, long *size)
+int download_file(char *filename, char *md5, char *size)
 {
 	char buf[4096];
 	int n;
@@ -102,28 +90,57 @@ int main()
 {
 	while(FCGI_Accept() >= 0)
 	{
-		char *username, *filename, *md5;
-		long *size;
+		char *contentlength = getenv("CONTENT_LENGTH");
+		int len = 0;
 
 		printf("Content-type: multipart/form-data\r\n\r\n");
-
-		//int get_download_fileinfo(char **p_username, char **p_filename, char **p_md5, long **p_size)
-		int flag = get_download_fileinfo(&username, &filename, &md5, &size);
-		// 获取用户信息成功
-		if(flag == 0)
+		if(contentlength != NULL)
 		{
+			len = strtol(contentlength, NULL, 10);
+		}
+		
+		if(len <= 0)
+		{
+			printf("Nothing!");
+		}
+		else
+		{
+			char *buf = (char *)malloc(len);
+			if(buf == NULL)
+			{
+				printf("malloc error!");
+				continue;
+			}
+
+			int readlength = fread(buf, 1, len, stdin);
+			if(readlength <= 0)
+			{
+				printf("read length <= 0");
+				free(buf);
+				continue;
+			}
+			
+			char *username = get_json(buf, "username");
+			char *filename = get_json(buf, "filename");
+			char *md5 = get_json(buf, "md5");
+			char *size = get_json(buf, "size");
+
 			//int download_file(char *filename, char *md5, long *size)
 			download_file(filename, md5, size);
+
+			if(username != NULL)
+				free(username);
+			if(filename != NULL)
+				free(filename);
+			if(md5 != NULL)
+				free(md5);
+			if(size != NULL)
+				free(size);
+			if(buf != NULL)
+				free(buf);
+
 		}
 
-		if(username != NULL)
-			free(username);
-		if(filename != NULL)
-			free(filename);
-		if(md5 != NULL)
-			free(md5);
-		if(size != NULL)
-			free(size);
 	}
 
 	return 0;

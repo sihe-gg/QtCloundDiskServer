@@ -1,66 +1,39 @@
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "mysql.h"
 #include "fcgi_stdio.h"
 
-// 取出登录信息
-int get_login_data(char **username, char **password, char **p_date)
+char *get_json(char *json, char *json_key)
 {
-	char *name, *pwd, *date;
-	char *p, *t;
-	char *begin;
-	char *buf;
+	char *value;
 
-	// 开辟内存空间
-	name = (char *)malloc(64);
-	pwd = (char *)malloc(64);
-	date = (char *)malloc(30);
-	if(name == NULL || pwd == NULL || date == NULL)
-		return -1;
+	char *begin = strstr(json, json_key);
+	if(begin == NULL)
+	{   
+		return NULL;
+	}   
+	begin += strlen(json_key);
 
-	buf = (char *)malloc(4096);
-	if(buf == NULL)
-		return -1;
+	// 找到第一个是字母数字的位置
+	while(!isalnum(json[begin - json]))
+	{   
+		begin++;
+	}   
 
-	// 从客户端读入数据
-	int len = fread(buf, 1, 4096, stdin);
-	if(len <= 0)
-	{
-		free(buf);
-		return -1;
-	}
+	char *end = strchr(begin, '"');
 
-	// 登录数据分割
-	begin = buf;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(date, p, t-p);
-	date[t-p] = '\0';
+	value = (char *)malloc(end - begin);
+	if(value == NULL)
+	{   
+		return NULL;
+	}   
 
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(pwd, p, t-p);
-	pwd[t-p] = '\0';
+	strncpy(value, begin, end - begin);
+	value[end - begin] = '\0';
 
-	begin = t;
-	p = strchr(begin, ':');
-	p += 3;		//跳过: "
-	t = strchr(p, '"');
-	strncpy(name, p, t-p);
-	name[t-p] = '\0';
-
-	// 传出登录信息数据
-	*username = name;
-	*password = pwd;
-	*p_date = date;
-
-	free(buf);
-	return 0;
-
+	return value;
 }
 
 // 数据库验证登录信息
@@ -97,7 +70,7 @@ int verify_login_data(const char *username, const char *password, const char *da
 			sprintf(mysqlquery, "update registered set lastlogintime='%s' where username='%s' and password='%s';", date, username, password);
 			mysql_query(&mysql, mysqlquery);
 			mysql_query(&mysql, "flush privileges;");
-			
+
 			mysql_close(&mysql);
 			return 0;
 		}
@@ -115,38 +88,68 @@ int verify_login_data(const char *username, const char *password, const char *da
 }
 
 
+
 int main()
 {
 	while (FCGI_Accept() >= 0) 
 	{
-		char *username, *password, *date;
-		int flag;
-		int ok = -1;;
-
-		flag = get_login_data(&username, &password, &date);
-
-		if(flag == 0)
-		{
-			ok = verify_login_data(username, password, date);
-		}
+		int len = 0;
+		char *contentlength = getenv("CONTENT_LENGTH");
 
 		// 发送回应
 		printf("Content-type: application/json\r\n\r\n");
-		if(ok == 0)
+
+		if(contentlength != NULL)
 		{
-			printf("{\"code\":\"003\"}");	//验证成功
+			len = strtol(contentlength, NULL, 10);
 		}
-		else
+
+		if(len <= 0)
 		{
 			printf("{\"code\":\"002\"}");	//验证失败
 		}
+		else
+		{
+			char *buf = (char *)malloc(len);
+			if(buf == NULL)
+			{
+				printf("{\"code\":\"002\"}");	//验证失败
+				continue;
+			}
 
-		if(username != NULL)
-			free(username);
-		if(password != NULL)
-			free(password);
-		if(date != NULL)
-			free(date);
+			// 从客户端读入数据
+			int readlength = fread(buf, 1, len, stdin);
+			if(readlength <= 0)
+			{
+				printf("{\"code\":\"002\"}");	//验证失败
+				free(buf);
+				continue;
+			}
+
+			char *username = get_json(buf, "username");
+			char *password = get_json(buf, "password");
+			char *date = get_json(buf, "logindate");
+
+			int ok = verify_login_data(username, password, date);
+
+			if(ok == 0)
+			{
+				printf("{\"code\":\"003\"}");	//验证成功
+			}
+			else
+			{
+				printf("{\"code\":\"002\"}");	//验证失败
+			}
+
+			if(username != NULL)
+				free(username);
+			if(password != NULL)
+				free(password);
+			if(date != NULL)
+				free(date);
+			if(buf != NULL)
+				free(buf);
+		}
 	}
 
 	return 0;
